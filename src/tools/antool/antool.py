@@ -41,28 +41,22 @@ DO_REINIT = 1
 
 
 ########################################################################################################################
-# AnalyzingTool
+# Converter
 ########################################################################################################################
-class AnalyzingTool(ListSyscalls):
-    def __init__(self, convert_mode, pmem_paths, fileout, max_packets, offline_mode,
-                 script_mode, debug_mode, verbose_mode):
+class Converter(ListSyscalls):
+    def __init__(self, fileout, max_packets, offline_mode, script_mode, debug_mode, verbose_mode):
 
         ListSyscalls.__init__(self, script_mode, debug_mode, verbose_mode)
 
-        self.convert_mode = convert_mode
         self.script_mode = script_mode
         self.debug_mode = debug_mode
         self.offline_mode = offline_mode
         self.verbose_mode = verbose_mode
 
-        self.print_progress = not (self.debug_mode or self.script_mode or (self.convert_mode and not self.offline_mode)
-                                   or (not self.convert_mode and self.verbose_mode >= 2))
+        self.print_progress = not (self.debug_mode or self.script_mode or (not self.offline_mode))
 
         self.syscall_table = []
         self.syscall = []
-
-        paths = str(pmem_paths)
-        self.pmem_paths = paths.split(':')
 
         if max_packets:
             self.max_packets = int(max_packets)
@@ -85,7 +79,6 @@ class AnalyzingTool(ListSyscalls):
 
         self.log_main = logging.getLogger("main")
 
-        self.log_main.debug("convert_mode   = {0:d}".format(self.convert_mode))
         self.log_main.debug("script_mode    = {0:d}".format(self.script_mode))
         self.log_main.debug("offline_mode   = {0:d}".format(self.offline_mode))
         self.log_main.debug("verbose_mode   = {0:d}".format(self.verbose_mode))
@@ -182,17 +175,6 @@ class AnalyzingTool(ListSyscalls):
             return DO_GO_ON
 
         return DO_GO_ON
-
-    ####################################################################################################################
-    # analyse_if_supported - check if the syscall is supported by pmemfile
-    ####################################################################################################################
-    def analyse_if_supported(self, syscall):
-        syscall.pid_ind = self.set_pid_index(syscall.pid_tid)
-        if self.has_entry_content(syscall):
-            self.match_fd_with_path(syscall)
-            syscall.unsupported = self.check_if_supported(syscall)
-            self.add_to_unsupported_lists_or_print(syscall)
-        return syscall
 
     ####################################################################################################################
     # read_and_parse_data - read and parse data from a vltrace binary log file
@@ -295,10 +277,8 @@ class AnalyzingTool(ListSyscalls):
                 if state == STATE_COMPLETED:
                     if self.offline_mode:
                         self.list_ok.append(self.syscall)
-                    elif not self.convert_mode:
-                        self.syscall = self.analyse_if_supported(self.syscall)
 
-                if self.convert_mode and not self.offline_mode:
+                if not self.offline_mode:
                     self.syscall.print_single_record(DEBUG_OFF)
                 elif self.debug_mode:
                     self.syscall.print_single_record(DEBUG_ON)
@@ -328,45 +308,21 @@ class AnalyzingTool(ListSyscalls):
             self.list_ok += self.list_others
         self.list_ok.sort()
 
-        if not self.convert_mode and not self.offline_mode:
-            for n in range(len(self.list_ok)):
-                self.list_ok[n] = self.analyse_if_supported(self.list_ok[n])
-            self.print_unsupported_syscalls()
-
-    ####################################################################################################################
-    def set_pid_index_offline(self):
-        self.list_ok.set_pid_index_offline()
-
-    ####################################################################################################################
-    def match_fd_with_path_offline(self, pmem_paths):
-        self.list_ok.match_fd_with_path_offline(pmem_paths)
-
-    ####################################################################################################################
-    def print_unsupported_syscalls_offline(self):
-        self.list_ok.print_unsupported_syscalls_offline()
-
 
 ########################################################################################################################
 # main
 ########################################################################################################################
 
 def main():
-    parser = argparse.ArgumentParser(
-                        description="Analyzing Tool - analyze binary logs of vltrace "
-                                    "and check if all recorded syscalls are supported by pmemfile")
+    parser = argparse.ArgumentParser(description="Converter - converts vltrace logs from binary to text format")
 
     parser.add_argument("-t", "--table", required=True,
                         help="path to the 'syscalls_table.dat' file generated by vltrace")
     parser.add_argument("-b", "--binlog", required=True, help="path to a vltrace log in binary format")
 
-    parser.add_argument("-c", "--convert", action='store_true', required=False,
-                        help="converter mode - only converts vltrace log from binary to text format")
-
-    parser.add_argument("-p", "--pmem", required=False, help="paths to colon-separated pmem filesystems")
     parser.add_argument("-m", "--max_packets", required=False,
                         help="maximum number of packets to be read from the vltrace binary log")
 
-    parser.add_argument("-l", "--log", action='store_true', required=False, help="print converted log in analyze mode")
     parser.add_argument("-o", "--output", required=False, help="file to save analysis output")
 
     parser.add_argument("-s", "--script", action='store_true', required=False,
@@ -374,7 +330,7 @@ def main():
     parser.add_argument("-v", "--verbose", action='count', required=False,
                         help="verbose mode (-v: verbose, -vv: very verbose)")
     parser.add_argument("-d", "--debug", action='store_true', required=False, help="debug mode")
-    parser.add_argument("-f", "--offline", action='store_true', required=False, help="offline analysis mode")
+    parser.add_argument("-f", "--offline", action='store_true', required=False, help="offline mode")
 
     args = parser.parse_args()
 
@@ -383,20 +339,12 @@ def main():
     else:
         verbose = 0
 
-    at = AnalyzingTool(args.convert, args.pmem, args.output, args.max_packets, args.offline, args.script, args.debug,
-                       verbose)
+    at = Converter(args.output, args.max_packets, args.offline, args.script, args.debug, verbose)
     at.read_syscall_table(args.table)
     at.read_and_parse_data(args.binlog)
 
-    if args.offline and (args.convert or args.log):
+    if args.offline:
         at.print_log()
-
-    if args.convert or not args.offline:
-        return
-
-    at.set_pid_index_offline()
-    at.match_fd_with_path_offline(args.pmem)
-    at.print_unsupported_syscalls_offline()
 
 
 if __name__ == "__main__":
