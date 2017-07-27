@@ -34,6 +34,8 @@ import struct
 import inspect
 
 from sys import stderr
+from random import randint
+
 from exceptions import *
 
 
@@ -60,7 +62,7 @@ def open_file(path, flags):
         fh = open(path, flags)
     except FileNotFoundError:
         print("ERROR: file not found: {0:s}".format(path), file=stderr)
-        exit(-1)
+        exit(0)
     except:
         print("ERROR: unexpected error", file=stderr)
         raise
@@ -88,3 +90,26 @@ def read_fmt_data(fh, fmt):
     size = struct.calcsize(fmt)
     bdata = read_bdata(fh, size)
     return struct.unpack(fmt, bdata)
+
+
+####################################################################################################################
+# write_fi_bdata - write binary data to file
+####################################################################################################################
+def write_fi_bdata(fh, fip, bdata):
+    # fault injection
+    bdata = list(bdata)
+    for i in range(1, len(bdata)):
+        if randint(1, 100) <= fip:
+            bdata[i] = randint(0, 255)
+    bdata = bytes(bdata)
+
+    size = fh.write(bdata)
+    assert_msg(len(bdata) == size, "error writing to the file")
+
+
+####################################################################################################################
+# write_fmt_data -- write formatted data to file fh
+####################################################################################################################
+def write_fmt_data(fh, fip, fmt, *args):
+    bdata = struct.pack(fmt, *args)
+    write_fi_bdata(fh, fip, bdata)

@@ -98,7 +98,7 @@ class SyscallTable:
 
             except CriticalError as err:
                 print("ERROR: {0:s}".format(err.message), file=stderr)
-                exit(-1)
+                exit(0)
 
             except:
                 print("ERROR: unexpected error", file=stderr)

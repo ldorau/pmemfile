@@ -287,7 +287,7 @@ class AnalyzingTool(ListSyscalls):
 
         except FileNotFoundError:
             print("ERROR: file not found: {0:s}".format(path_to_trace_log), file=stderr)
-            exit(-1)
+            exit(0)
 
         except:
             print("ERROR: unexpected error", file=stderr)
@@ -332,11 +332,11 @@ class AnalyzingTool(ListSyscalls):
 
         except EndOfFile:
             print("ERROR: log file is truncated: {0:s}".format(path_to_trace_log), file=stderr)
-            exit(-1)
+            exit(0)
 
         except CriticalError as err:
             print("ERROR: {0:s}".format(err.message), file=stderr)
-            exit(-1)
+            exit(0)
 
         except:
             self.log_main.critical("unexpected error")
@@ -391,7 +391,7 @@ class AnalyzingTool(ListSyscalls):
 
             except CriticalError as err:
                 print("ERROR: {0:s}".format(err.message), file=stderr)
-                exit(-1)
+                exit(0)
 
             except EndOfFile:
                 break
@@ -427,6 +427,137 @@ class AnalyzingTool(ListSyscalls):
     def print_unsupported_syscalls_offline(self):
         self.list_ok.print_unsupported_syscalls_offline()
 
+    ####################################################################################################################
+    # do_fault_injection - inject errors
+    ####################################################################################################################
+    def do_fault_injection(self, path_to_trace_log, output_file, percents):
+        sizei = struct.calcsize('i')
+        sizeI = struct.calcsize('I')
+        sizeQ = struct.calcsize('Q')
+        sizeIQQQ = sizeI + 3 * sizeQ
+        sizeIIQQQ = 2 * sizeI + 3 * sizeQ
+
+        file_size = 0
+        read_size = 0
+
+        try:
+            statinfo = stat(path_to_trace_log)
+            file_size = statinfo.st_size
+
+        except FileNotFoundError:
+            self.log_main.critical("ERROR: file not found: {0:s}".format(path_to_trace_log))
+            exit(0)
+
+        except:
+            self.log_main.critical("ERROR: unexpected error")
+            raise
+
+        percents = int(percents)
+        percents -= 1000000 * int(percents / 1000000)
+
+        pfaultinj = int(percents / 10000)
+        percents -= 10000 * pfaultinj
+
+        psaveit = int(percents / 100)
+        pskipit = percents - 100 * psaveit
+
+        fh = open_file(path_to_trace_log, 'rb')
+        fhout = open_file(output_file, 'wb')
+
+        # read and init global buf_size
+        buf_size, = read_fmt_data(fh, 'i')
+        write_fmt_data(fhout, pfaultinj, 'i', buf_size)
+        read_size += sizei
+
+        # read length of CWD
+        cwd_len, = read_fmt_data(fh, 'i')
+        write_fmt_data(fhout, pfaultinj, 'i', cwd_len)
+        read_size += sizei
+
+        # read CWD
+        bdata = fh.read(cwd_len)
+        write_fi_bdata(fhout, pfaultinj, bdata)
+        read_size += cwd_len
+
+        # read header = command line
+        data_size, argc = read_fmt_data(fh, 'ii')
+        write_fmt_data(fhout, pfaultinj, 'ii', data_size, argc)
+        data_size -= sizei
+        bdata = fh.read(data_size)
+        write_fi_bdata(fhout, pfaultinj, bdata)
+        read_size += 2 * sizei + data_size
+
+        if not self.script_mode:
+            print("Reading packets:")
+
+        n = 0
+        skipped = 0
+
+        saved1 = 0
+        saved2 = 0
+
+        while True:
+            try:
+                saveit = 0
+                skipit = 0
+                if randint(1, 100) <= psaveit:
+                    saveit = 1
+                    if randint(1, 100) <= pskipit:
+                        skipit = 1
+
+                data_size, info_all, pid_tid, sc_id, timestamp = read_fmt_data(fh, 'IIQQQ')
+
+                if not saveit:
+                    write_fmt_data(fhout, 'IIQQQ', data_size, info_all, pid_tid, sc_id, timestamp)
+                    saved1 = 0
+                else:
+                    if saved1 and not skipit:
+                        # noinspection PyArgumentList
+                        write_fmt_data(fhout, 'IIQQQ', *saved1)
+                    saved1 = data_size, info_all, pid_tid, sc_id, timestamp
+
+                data_size -= sizeIQQQ
+                bdata = read_bdata(fh, data_size)
+                read_size += sizeIIQQQ + data_size
+
+                if not saveit:
+                    write_fi_bdata(fhout, pfaultinj, bdata)
+                    saved2 = 0
+                else:
+                    if saved2 and not skipit:
+                        write_fi_bdata(fhout, pfaultinj, saved2)
+                    saved2 = bdata
+
+                n += 1
+                if self.print_progress:
+                    print("\r{0:d} ({1:d}%) ".format(n, int((100 * read_size) / file_size)), end=' ')
+
+                if n >= self.max_packets > 0:
+                    if not self.script_mode:
+                        print("done (read maximum number of packets: {0:d})".format(n))
+                    break
+
+                if saveit:
+                    skipped += 1
+
+            except CriticalError as err:
+                print("ERROR: {0:s}".format(err.message), file=stderr)
+                exit(0)
+
+            except EndOfFile:
+                break
+
+            except:
+                self.log_main.critical("unexpected error")
+                raise
+
+        fh.close()
+        fhout.close()
+
+        if self.print_progress:
+            print("\rDone (read {0:d} packets).".format(n))
+            print("Skipped {0:d} packets.".format(skipped))
+
 
 ########################################################################################################################
 # main
@@ -455,6 +586,7 @@ def main():
                         help="verbose mode (-v: verbose, -vv: very verbose)")
     parser.add_argument("-d", "--debug", action='store_true', required=False, help="debug mode")
     parser.add_argument("-f", "--offline", action='store_true', required=False, help="offline analysis mode")
+    parser.add_argument("-i", "--inject", required=False, help="fault injection percents = 100 * saveit[%] + skipit[%]")
 
     args = parser.parse_args()
 
@@ -465,6 +597,10 @@ def main():
 
     at = AnalyzingTool(args.convert, args.pmem, args.output, args.max_packets, args.offline, args.script, args.debug,
                        verbose)
+
+    if args.inject:
+        at.do_fault_injection(args.binlog, args.output, args.inject)
+        return
 
     at.read_and_parse_data(args.binlog)
 
