@@ -66,11 +66,13 @@ class SyscallTable:
     ####################################################################################################################
     # read_syscall_table -- read the syscall table from the file
     ####################################################################################################################
-    def read_syscall_table(self, fh):
+    def read_syscall_table(self, fh, fhout, pfaultinj):
         fmt = 'I4sP32sIIIiI6s6s'
         size_fmt = struct.calcsize(fmt)
 
         size_check, = read_fmt_data(fh, 'i')
+        write_fmt_data(fhout, pfaultinj, 'i', size_check)
+
         if size_check != size_fmt:
             self.log_sctbl.error("wrong format of syscalls table:")
             self.log_sctbl.error("      format size : {0:d}".format(size_fmt))

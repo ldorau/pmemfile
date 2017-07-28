@@ -106,8 +106,8 @@ class AnalyzingTool(ListSyscalls):
         self.list_others = ListSyscalls(pmem_paths, script_mode, debug_mode, verbose_mode)
 
     ####################################################################################################################
-    def read_syscall_table(self, fh):
-        self.syscall_table.read_syscall_table(fh)
+    def read_syscall_table(self, fh, fhout, pfaultinj):
+        self.syscall_table.read_syscall_table(fh, fhout, pfaultinj)
 
     ####################################################################################################################
     def print_log(self):
@@ -233,8 +233,9 @@ class AnalyzingTool(ListSyscalls):
     # check_signature -- check signature
     ####################################################################################################################
     @staticmethod
-    def check_signature(fh, signature):
+    def check_signature(fh, signature, fhout, pfaultinj):
         sign, = read_fmt_data(fh, '12s')
+        write_fmt_data(fhout, pfaultinj, '12s', sign)
         bsign = bytes(sign)
         sign = str(bsign.decode(errors="ignore"))
         sign = sign.split('\0')[0]
@@ -246,8 +247,9 @@ class AnalyzingTool(ListSyscalls):
     # check_version -- check version
     ####################################################################################################################
     @staticmethod
-    def check_version(fh, major, minor):
+    def check_version(fh, major, minor, fhout, pfaultinj):
         vmajor, vminor, vpatch = read_fmt_data(fh, 'III')
+        write_fmt_data(fhout, pfaultinj, 'III', vmajor, vminor, vpatch)
         if vmajor < major or (vmajor == major and vminor < minor):
             raise CriticalError("wrong version of vltrace log: {0:d}.{1:d}.{2:d} (required: {3:d}.{4:d}.0 or later)"
                                 .format(vmajor, vminor, vpatch, major, minor))
@@ -256,8 +258,9 @@ class AnalyzingTool(ListSyscalls):
     # check_architecture -- check hardware architecture
     ####################################################################################################################
     @staticmethod
-    def check_architecture(fh, architecture):
+    def check_architecture(fh, architecture, fhout, pfaultinj):
         arch, = read_fmt_data(fh, 'I')
+        write_fmt_data(fhout, pfaultinj, 'I', arch)
         if arch != architecture:
             if arch in range(len(Archs)):
                 iarch = arch
@@ -464,28 +467,49 @@ class AnalyzingTool(ListSyscalls):
         fh = open_file(path_to_trace_log, 'rb')
         fhout = open_file(output_file, 'wb')
 
-        # read and init global buf_size
-        buf_size, = read_fmt_data(fh, 'i')
-        write_fmt_data(fhout, pfaultinj, 'i', buf_size)
-        read_size += sizei
+        try:
+            self.check_signature(fh, VLTRACE_TAB_SIGNATURE, fhout, pfaultinj)
+            self.check_version(fh, VLTRACE_VMAJOR, VLTRACE_VMINOR, fhout, pfaultinj)
+            self.check_architecture(fh, ARCH_x86_64, fhout, pfaultinj)
 
-        # read length of CWD
-        cwd_len, = read_fmt_data(fh, 'i')
-        write_fmt_data(fhout, pfaultinj, 'i', cwd_len)
-        read_size += sizei
+            self.read_syscall_table(fh, fhout, pfaultinj)
 
-        # read CWD
-        bdata = fh.read(cwd_len)
-        write_fi_bdata(fhout, pfaultinj, bdata)
-        read_size += cwd_len
+            self.check_signature(fh, VLTRACE_LOG_SIGNATURE, fhout, pfaultinj)
 
-        # read header = command line
-        data_size, argc = read_fmt_data(fh, 'ii')
-        write_fmt_data(fhout, pfaultinj, 'ii', data_size, argc)
-        data_size -= sizei
-        bdata = fh.read(data_size)
-        write_fi_bdata(fhout, pfaultinj, bdata)
-        read_size += 2 * sizei + data_size
+            # read and init global buf_size
+            buf_size, = read_fmt_data(fh, 'i')
+            write_fmt_data(fhout, pfaultinj, 'i', buf_size)
+            read_size += sizei
+
+            # read length of CWD
+            cwd_len, = read_fmt_data(fh, 'i')
+            write_fmt_data(fhout, pfaultinj, 'i', cwd_len)
+            read_size += sizei
+
+            # read CWD
+            bdata = fh.read(cwd_len)
+            write_fi_bdata(fhout, pfaultinj, bdata)
+            read_size += cwd_len
+
+            # read header = command line
+            data_size, argc = read_fmt_data(fh, 'ii')
+            write_fmt_data(fhout, pfaultinj, 'ii', data_size, argc)
+            data_size -= sizei
+            bdata = fh.read(data_size)
+            write_fi_bdata(fhout, pfaultinj, bdata)
+            read_size += 2 * sizei + data_size
+
+        except EndOfFile:
+            print("ERROR: log file is truncated: {0:s}".format(path_to_trace_log), file=stderr)
+            exit(0)
+
+        except CriticalError as err:
+            print("ERROR: {0:s}".format(err.message), file=stderr)
+            exit(0)
+
+        except:
+            self.log_main.critical("unexpected error")
+            raise
 
         if not self.script_mode:
             print("Reading packets:")
@@ -508,12 +532,12 @@ class AnalyzingTool(ListSyscalls):
                 data_size, info_all, pid_tid, sc_id, timestamp = read_fmt_data(fh, 'IIQQQ')
 
                 if not saveit:
-                    write_fmt_data(fhout, 'IIQQQ', data_size, info_all, pid_tid, sc_id, timestamp)
+                    write_fmt_data(fhout, pfaultinj, 'IIQQQ', data_size, info_all, pid_tid, sc_id, timestamp)
                     saved1 = 0
                 else:
                     if saved1 and not skipit:
                         # noinspection PyArgumentList
-                        write_fmt_data(fhout, 'IIQQQ', *saved1)
+                        write_fmt_data(fhout, pfaultinj, 'IIQQQ', *saved1)
                     saved1 = data_size, info_all, pid_tid, sc_id, timestamp
 
                 data_size -= sizeIQQQ
