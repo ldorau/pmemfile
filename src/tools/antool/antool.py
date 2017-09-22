@@ -352,12 +352,24 @@ class AnalyzingTool(ListSyscalls):
                         print("done (read maximum number of packets: {0:d})".format(n))
                     break
 
+                print("BEFORE: ", n, fh.tell())
+                self.log_main.debug("BEFORE: {0:d}".format(fh.tell()))
+
                 # read data from the file
-                data_size, info_all, pid_tid, sc_id, timestamp = read_fmt_data(fh, 'IIQQQ')
+                data_size, info_all, pid_tid = read_fmt_data(fh, 'IIQ')
+                sc_id, timestamp = read_fmt_data(fh, 'QQ')
                 # subtract size of all read fields except of 'data_size' itself,
                 # because 'data_size' does not include its own size
                 data_size -= sizeIQQQ
+
                 bdata = read_bdata(fh, data_size)
+
+                print("READ:", data_size, bdata)
+
+                print("AFTER #{0:d}: position {1:d} data_size {2:d} (0x{3:016X}) info_all 0x{4:016X} pid_tid 0x{5:016X} sc_id 0x{6:016X}"
+                        .format(n, fh.tell(), data_size, data_size, info_all, pid_tid, sc_id))
+                self.log_main.debug("AFTER: {0:d}".format(fh.tell()))
+                print("0x{0:016X} {1:s}".format(pid_tid, self.syscall_table.name(sc_id)))
 
                 # print progress
                 n += 1
